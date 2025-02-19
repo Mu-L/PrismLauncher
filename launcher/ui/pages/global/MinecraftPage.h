@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 /*
- *  PolyMC - Minecraft Launcher
+ *  Prism Launcher - Minecraft Launcher
  *  Copyright (c) 2022 Jamie Mansfield <jmansfield@cadixdev.org>
  *
  *  This program is free software: you can redistribute it and/or modify
@@ -35,57 +35,30 @@
 
 #pragma once
 
-#include <memory>
 #include <QDialog>
+#include <memory>
 
+#include "Application.h"
 #include "java/JavaChecker.h"
 #include "ui/pages/BasePage.h"
-#include <Application.h>
+#include "ui/widgets/MinecraftSettingsWidget.h"
 
 class SettingsObject;
 
-namespace Ui
-{
-class MinecraftPage;
-}
-
-class MinecraftPage : public QWidget, public BasePage
-{
+class MinecraftPage : public MinecraftSettingsWidget, public BasePage {
     Q_OBJECT
 
-public:
-    explicit MinecraftPage(QWidget *parent = 0);
-    ~MinecraftPage();
+   public:
+    explicit MinecraftPage(QWidget* parent = nullptr) : MinecraftSettingsWidget(nullptr, parent) {}
+    ~MinecraftPage() override {}
 
-    QString displayName() const override
+    QString displayName() const override { return tr("Minecraft"); }
+    QIcon icon() const override { return APPLICATION->getThemedIcon("minecraft"); }
+    QString id() const override { return "minecraft-settings"; }
+    QString helpPage() const override { return "Minecraft-settings"; }
+    bool apply() override
     {
-        return tr("Minecraft");
+        saveSettings();
+        return true;
     }
-    QIcon icon() const override
-    {
-        return APPLICATION->getThemedIcon("minecraft");
-    }
-    QString id() const override
-    {
-        return "minecraft-settings";
-    }
-    QString helpPage() const override
-    {
-        return "Minecraft-settings";
-    }
-    bool apply() override;
-    void retranslate() override;
-
-private:
-    void updateCheckboxStuff();
-    void applySettings();
-    void loadSettings();
-
-private
-slots:
-    void on_maximizedCheckBox_clicked(bool checked);
-
-private:
-    Ui::MinecraftPage *ui;
-
 };

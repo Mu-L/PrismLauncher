@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 /*
- *  PolyMC - Minecraft Launcher
+ *  Prism Launcher - Minecraft Launcher
  *  Copyright (c) 2022 Jamie Mansfield <jmansfield@cadixdev.org>
  *  Copyright (C) 2022 Sefa Eyeoglu <contact@scrumplex.net>
  *
@@ -35,31 +35,42 @@
  */
 
 #include "JavaPage.h"
+#include "BuildConfig.h"
 #include "JavaCommon.h"
+#include "java/JavaInstall.h"
+#include "ui/dialogs/CustomMessageBox.h"
+#include "ui/java/InstallJavaDialog.h"
 #include "ui_JavaPage.h"
 
+#include <QCheckBox>
+#include <QDir>
 #include <QFileDialog>
 #include <QMessageBox>
-#include <QDir>
+#include <QStringListModel>
 #include <QTabBar>
 
 #include "ui/dialogs/VersionSelectDialog.h"
 
-#include "java/JavaUtils.h"
 #include "java/JavaInstallList.h"
+#include "java/JavaUtils.h"
 
-#include "settings/SettingsObject.h"
 #include <FileSystem.h>
-#include "Application.h"
 #include <sys.h>
+#include "Application.h"
+#include "settings/SettingsObject.h"
 
-JavaPage::JavaPage(QWidget *parent) : QWidget(parent), ui(new Ui::JavaPage)
+JavaPage::JavaPage(QWidget* parent) : QWidget(parent), ui(new Ui::JavaPage)
 {
     ui->setupUi(this);
-    ui->tabWidget->tabBar()->hide();
-
-    loadSettings();
-    updateThresholds();
+    
+    if (BuildConfig.JAVA_DOWNLOADER_ENABLED) {
+        ui->managedJavaList->initialize(new JavaInstallList(this, true));
+        ui->managedJavaList->setResizeOn(2);
+        ui->managedJavaList->selectCurrent();
+        ui->managedJavaList->setEmptyString(tr("No managed Java versions are installed"));
+        ui->managedJavaList->setEmptyErrorString(tr("Couldn't load the managed Java list!"));
+    } else
+        ui->tabWidget->tabBar()->hide();
 }
 
 JavaPage::~JavaPage()
@@ -67,152 +78,53 @@ JavaPage::~JavaPage()
     delete ui;
 }
 
-bool JavaPage::apply()
-{
-    applySettings();
-    return true;
-}
-
-void JavaPage::applySettings()
-{
-    auto s = APPLICATION->settings();
-
-    // Memory
-    int min = ui->minMemSpinBox->value();
-    int max = ui->maxMemSpinBox->value();
-    if(min < max)
-    {
-        s->set("MinMemAlloc", min);
-        s->set("MaxMemAlloc", max);
-    }
-    else
-    {
-        s->set("MinMemAlloc", max);
-        s->set("MaxMemAlloc", min);
-    }
-    s->set("PermGen", ui->permGenSpinBox->value());
-
-    // Java Settings
-    s->set("JavaPath", ui->javaPathTextBox->text());
-    s->set("JvmArgs", ui->jvmArgsTextBox->toPlainText().replace("\n", " "));
-    s->set("IgnoreJavaCompatibility", ui->skipCompatibilityCheckbox->isChecked());
-    s->set("IgnoreJavaWizard", ui->skipJavaWizardCheckbox->isChecked());
-    JavaCommon::checkJVMArgs(s->get("JvmArgs").toString(), this->parentWidget());
-}
-void JavaPage::loadSettings()
-{
-    auto s = APPLICATION->settings();
-    // Memory
-    int min = s->get("MinMemAlloc").toInt();
-    int max = s->get("MaxMemAlloc").toInt();
-    if(min < max)
-    {
-        ui->minMemSpinBox->setValue(min);
-        ui->maxMemSpinBox->setValue(max);
-    }
-    else
-    {
-        ui->minMemSpinBox->setValue(max);
-        ui->maxMemSpinBox->setValue(min);
-    }
-    ui->permGenSpinBox->setValue(s->get("PermGen").toInt());
-
-    // Java Settings
-    ui->javaPathTextBox->setText(s->get("JavaPath").toString());
-    ui->jvmArgsTextBox->setPlainText(s->get("JvmArgs").toString());
-    ui->skipCompatibilityCheckbox->setChecked(s->get("IgnoreJavaCompatibility").toBool());
-    ui->skipJavaWizardCheckbox->setChecked(s->get("IgnoreJavaWizard").toBool());
-}
-
-void JavaPage::on_javaDetectBtn_clicked()
-{
-    if (JavaUtils::getJavaCheckPath().isEmpty()) {
-        JavaCommon::javaCheckNotFound(this);
-        return;
-    }
-
-    JavaInstallPtr java;
-
-    VersionSelectDialog vselect(APPLICATION->javalist().get(), tr("Select a Java version"), this, true);
-    vselect.setResizeOn(2);
-    vselect.exec();
-
-    if (vselect.result() == QDialog::Accepted && vselect.selectedVersion())
-    {
-        java = std::dynamic_pointer_cast<JavaInstall>(vselect.selectedVersion());
-        ui->javaPathTextBox->setText(java->path);
-    }
-}
-
-void JavaPage::on_javaBrowseBtn_clicked()
-{
-    QString raw_path = QFileDialog::getOpenFileName(this, tr("Find Java executable"));
-
-    // do not allow current dir - it's dirty. Do not allow dirs that don't exist
-    if(raw_path.isEmpty())
-    {
-        return;
-    }
-
-    QString cooked_path = FS::NormalizePath(raw_path);
-    QFileInfo javaInfo(cooked_path);;
-    if(!javaInfo.exists() || !javaInfo.isExecutable())
-    {
-        return;
-    }
-    ui->javaPathTextBox->setText(cooked_path);
-}
-
-void JavaPage::on_javaTestBtn_clicked()
-{
-    if(checker)
-    {
-        return;
-    }
-    checker.reset(new JavaCommon::TestCheck(
-        this, ui->javaPathTextBox->text(), ui->jvmArgsTextBox->toPlainText().replace("\n", " "),
-        ui->minMemSpinBox->value(), ui->maxMemSpinBox->value(), ui->permGenSpinBox->value()));
-    connect(checker.get(), SIGNAL(finished()), SLOT(checkerFinished()));
-    checker->run();
-}
-
-void JavaPage::on_maxMemSpinBox_valueChanged(int i)
-{
-    updateThresholds();
-}
-
-void JavaPage::checkerFinished()
-{
-    checker.reset();
-}
-
 void JavaPage::retranslate()
 {
     ui->retranslateUi(this);
 }
 
-void JavaPage::updateThresholds()
+bool JavaPage::apply()
 {
-    auto sysMiB = Sys::getSystemRam() / Sys::mebibyte;
-    unsigned int maxMem = ui->maxMemSpinBox->value();
+    ui->javaSettings->saveSettings();
+    JavaCommon::checkJVMArgs(APPLICATION->settings()->get("JvmArgs").toString(), this);
+    return true;
+}
 
-    QString iconName;
+void JavaPage::on_downloadJavaButton_clicked()
+{
+    auto jdialog = new Java::InstallDialog({}, nullptr, this);
+    jdialog->exec();
+    ui->managedJavaList->loadList();
+}
 
-    if (maxMem >= sysMiB) {
-        iconName = "status-bad";
-        ui->labelMaxMemIcon->setToolTip(tr("Your maximum memory allocation exceeds your system memory capacity."));
-    } else if (maxMem > (sysMiB * 0.9)) {
-        iconName = "status-yellow";
-        ui->labelMaxMemIcon->setToolTip(tr("Your maximum memory allocation approaches your system memory capacity."));
-    } else {
-        iconName = "status-good";
-        ui->labelMaxMemIcon->setToolTip("");
+void JavaPage::on_removeJavaButton_clicked()
+{
+    auto version = ui->managedJavaList->selectedVersion();
+    auto dcast = std::dynamic_pointer_cast<JavaInstall>(version);
+    if (!dcast) {
+        return;
     }
+    QDir dir(APPLICATION->javaPath());
 
-    {
-        auto height = ui->labelMaxMemIcon->fontInfo().pixelSize();
-        QIcon icon = APPLICATION->getThemedIcon(iconName);
-        QPixmap pix = icon.pixmap(height, height);
-        ui->labelMaxMemIcon->setPixmap(pix);
+    auto entries = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
+    for (auto& entry : entries) {
+        if (dcast->path.startsWith(entry.canonicalFilePath())) {
+            auto response = CustomMessageBox::selectable(this, tr("Confirm Deletion"),
+                                                         tr("You are about to remove  the Java installation named \"%1\".\n"
+                                                            "Are you sure?")
+                                                             .arg(entry.fileName()),
+                                                         QMessageBox::Warning, QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+                                ->exec();
+
+            if (response == QMessageBox::Yes) {
+                FS::deletePath(entry.canonicalFilePath());
+                ui->managedJavaList->loadList();
+            }
+            break;
+        }
     }
+}
+void JavaPage::on_refreshJavaButton_clicked()
+{
+    ui->managedJavaList->loadList();
 }

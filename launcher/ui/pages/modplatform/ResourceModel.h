@@ -10,6 +10,8 @@
 
 #include "QObjectPtr.h"
 
+#include "ResourceDownloadTask.h"
+#include "modplatform/ModIndex.h"
 #include "modplatform/ResourceAPI.h"
 
 #include "tasks/ConcurrentTask.h"
@@ -29,6 +31,8 @@ class ResourceModel : public QAbstractListModel {
     Q_PROPERTY(QString search_term MEMBER m_search_term WRITE setSearchTerm)
 
    public:
+    using DownloadTaskPtr = shared_qobject_ptr<ResourceDownloadTask>;
+
     ResourceModel(ResourceAPI* api);
     ~ResourceModel() override;
 
@@ -39,7 +43,10 @@ class ResourceModel : public QAbstractListModel {
     [[nodiscard]] virtual auto debugName() const -> QString;
     [[nodiscard]] virtual auto metaEntryBase() const -> QString = 0;
 
-    [[nodiscard]] inline int rowCount(const QModelIndex& parent) const override { return parent.isValid() ? 0 : m_packs.size(); }
+    [[nodiscard]] inline int rowCount(const QModelIndex& parent) const override
+    {
+        return parent.isValid() ? 0 : static_cast<int>(m_packs.size());
+    }
     [[nodiscard]] inline int columnCount(const QModelIndex& parent) const override { return parent.isValid() ? 0 : 1; }
     [[nodiscard]] inline auto flags(const QModelIndex& index) const -> Qt::ItemFlags override { return QAbstractListModel::flags(index); }
 
@@ -48,6 +55,17 @@ class ResourceModel : public QAbstractListModel {
     [[nodiscard]] Task::Ptr activeSearchJob() { return hasActiveSearchJob() ? m_current_search_job : nullptr; }
 
     [[nodiscard]] auto getSortingMethods() const { return m_api->getSortingMethods(); }
+
+    virtual QVariant getInstalledPackVersion(ModPlatform::IndexedPack::Ptr) const { return {}; }
+    /** Whether the version is opted out or not. Currently only makes sense in CF. */
+    virtual bool optedOut(const ModPlatform::IndexedVersion& ver) const
+    {
+        Q_UNUSED(ver);
+        return false;
+    };
+
+    virtual bool checkFilters(ModPlatform::IndexedPack::Ptr) { return true; }
+    virtual bool checkVersionFilters(const ModPlatform::IndexedVersion&);
 
    public slots:
     void fetchMore(const QModelIndex& parent) override;
@@ -80,6 +98,14 @@ class ResourceModel : public QAbstractListModel {
     /** Gets the icon at the URL for the given index. If it's not fetched yet, fetch it and update when fisinhed. */
     std::optional<QIcon> getIcon(QModelIndex&, const QUrl&);
 
+    void addPack(ModPlatform::IndexedPack::Ptr pack,
+                 ModPlatform::IndexedVersion& version,
+                 std::shared_ptr<ResourceFolderModel> packs,
+                 bool is_indexed = false,
+                 QString custom_target_folder = {});
+    void removePack(const QString& rem);
+    QList<DownloadTaskPtr> selectedPacks() { return m_selected; }
+
    protected:
     /** Resets the model's data. */
     void clearData();
@@ -98,12 +124,14 @@ class ResourceModel : public QAbstractListModel {
 
     /** Functions to load data into a pack.
      *
-     *  Those are needed for the same reason as ddocumentToArray, and NEED to be re-implemented in the same way.
+     *  Those are needed for the same reason as documentToArray, and NEED to be re-implemented in the same way.
      */
 
     virtual void loadIndexedPack(ModPlatform::IndexedPack&, QJsonObject&);
     virtual void loadExtraPackInfo(ModPlatform::IndexedPack&, QJsonObject&);
     virtual void loadIndexedPackVersions(ModPlatform::IndexedPack&, QJsonArray&);
+
+    virtual bool isPackInstalled(ModPlatform::IndexedPack::Ptr) const { return false; }
 
    protected:
     /* Basic search parameters */
@@ -123,7 +151,8 @@ class ResourceModel : public QAbstractListModel {
     QSet<QUrl> m_currently_running_icon_actions;
     QSet<QUrl> m_failed_icon_actions;
 
-    QList<ModPlatform::IndexedPack> m_packs;
+    QList<ModPlatform::IndexedPack::Ptr> m_packs;
+    QList<DownloadTaskPtr> m_selected;
 
     // HACK: We need this to prevent callbacks from calling the model after it has already been deleted.
     // This leaks a tiny bit of memory per time the user has opened a resource dialog. How to make this better?
@@ -132,6 +161,7 @@ class ResourceModel : public QAbstractListModel {
    private:
     /* Default search request callbacks */
     void searchRequestSucceeded(QJsonDocument&);
+    void searchRequestForOneSucceeded(QJsonDocument&);
     void searchRequestFailed(QString reason, int network_error_code);
     void searchRequestAborted();
 

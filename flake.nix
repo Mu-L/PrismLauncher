@@ -1,37 +1,137 @@
 {
   description = "A custom launcher for Minecraft that allows you to easily manage multiple installations of Minecraft at once (Fork of MultiMC)";
 
-  inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
-    flake-compat = { url = "github:edolstra/flake-compat"; flake = false; };
-    libnbtplusplus = { url = "github:PrismLauncher/libnbtplusplus"; flake = false; };
+  nixConfig = {
+    extra-substituters = [ "https://prismlauncher.cachix.org" ];
+    extra-trusted-public-keys = [
+      "prismlauncher.cachix.org-1:9/n/FGyABA2jLUVfY+DEp4hKds/rwO+SCOtbOkDzd+c="
+    ];
   };
 
-  outputs = { self, nixpkgs, libnbtplusplus, ... }:
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
+    libnbtplusplus = {
+      url = "github:PrismLauncher/libnbtplusplus";
+      flake = false;
+    };
+
+    nix-filter.url = "github:numtide/nix-filter";
+
+    /*
+      Inputs below this are optional and can be removed
+
+      ```
+      {
+        inputs.prismlauncher = {
+          url = "github:PrismLauncher/PrismLauncher";
+          inputs = {
+      	    flake-compat.follows = "";
+          };
+        };
+      }
+      ```
+    */
+
+    flake-compat = {
+      url = "github:edolstra/flake-compat";
+      flake = false;
+    };
+  };
+
+  outputs =
+    {
+      self,
+      nixpkgs,
+      libnbtplusplus,
+      nix-filter,
+      ...
+    }:
     let
-      # User-friendly version number.
-      version = builtins.substring 0 8 self.lastModifiedDate;
+      inherit (nixpkgs) lib;
 
-      # Supported systems (qtbase is currently broken for "aarch64-darwin")
-      supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-linux" ];
+      # While we only officially support aarch and x86_64 on Linux and MacOS,
+      # we expose a reasonable amount of other systems for users who want to
+      # build for most exotic platforms
+      systems = lib.systems.flakeExposed;
 
-      # Helper function to generate an attrset '{ x86_64-linux = f "x86_64-linux"; ... }'.
-      forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
-
-      # Nixpkgs instantiated for supported systems.
-      pkgs = forAllSystems (system: nixpkgs.legacyPackages.${system});
-
-      packagesFn = pkgs: rec {
-        prismlauncher-qt5 = pkgs.libsForQt5.callPackage ./nix { inherit version self libnbtplusplus; };
-        prismlauncher = pkgs.qt6Packages.callPackage ./nix { inherit version self libnbtplusplus; };
-      };
+      forAllSystems = lib.genAttrs systems;
+      nixpkgsFor = forAllSystems (system: nixpkgs.legacyPackages.${system});
     in
     {
-      packages = forAllSystems (system:
-        let packages = packagesFn pkgs.${system}; in
-        packages // { default = packages.prismlauncher; }
+      checks = forAllSystems (
+        system:
+        let
+          checks' = nixpkgsFor.${system}.callPackage ./nix/checks.nix { inherit self; };
+        in
+        lib.filterAttrs (_: lib.isDerivation) checks'
       );
 
-      overlay = final: packagesFn;
+      devShells = forAllSystems (
+        system:
+        let
+          pkgs = nixpkgsFor.${system};
+        in
+        {
+          default = pkgs.mkShell {
+            inputsFrom = [ self.packages.${system}.prismlauncher-unwrapped ];
+            buildInputs = with pkgs; [
+              ccache
+              ninja
+            ];
+          };
+        }
+      );
+
+      formatter = forAllSystems (system: nixpkgsFor.${system}.nixfmt-rfc-style);
+
+      overlays.default = final: prev: {
+        prismlauncher-unwrapped = prev.callPackage ./nix/unwrapped.nix {
+          inherit
+            libnbtplusplus
+            nix-filter
+            self
+            ;
+        };
+
+        prismlauncher = final.callPackage ./nix/wrapper.nix { };
+      };
+
+      packages = forAllSystems (
+        system:
+        let
+          pkgs = nixpkgsFor.${system};
+
+          # Build a scope from our overlay
+          prismPackages = lib.makeScope pkgs.newScope (final: self.overlays.default final pkgs);
+
+          # Grab our packages from it and set the default
+          packages = {
+            inherit (prismPackages) prismlauncher-unwrapped prismlauncher;
+            default = prismPackages.prismlauncher;
+          };
+        in
+        # Only output them if they're available on the current system
+        lib.filterAttrs (_: lib.meta.availableOn pkgs.stdenv.hostPlatform) packages
+      );
+
+      # We put these under legacyPackages as they are meant for CI, not end user consumption
+      legacyPackages = forAllSystems (
+        system:
+        let
+          prismPackages = self.packages.${system};
+          legacyPackages = self.legacyPackages.${system};
+        in
+        {
+          prismlauncher-debug = prismPackages.prismlauncher.override {
+            prismlauncher-unwrapped = legacyPackages.prismlauncher-unwrapped-debug;
+          };
+
+          prismlauncher-unwrapped-debug = prismPackages.prismlauncher-unwrapped.overrideAttrs {
+            cmakeBuildType = "Debug";
+            dontStrip = true;
+          };
+        }
+      );
     };
 }

@@ -8,8 +8,8 @@
 
 #include "modplatform/ModIndex.h"
 
-#include "ui/pages/modplatform/ResourcePage.h"
 #include "ui/pages/modplatform/ModModel.h"
+#include "ui/pages/modplatform/ResourcePage.h"
 #include "ui/widgets/ModFilterWidget.h"
 
 namespace Ui {
@@ -25,13 +25,13 @@ class ModPage : public ResourcePage {
     Q_OBJECT
 
    public:
-    template<typename T>
+    template <typename T>
     static T* create(ModDownloadDialog* dialog, BaseInstance& instance)
     {
         auto page = new T(dialog, instance);
         auto model = static_cast<ModModel*>(page->getModel());
 
-        auto filter_widget = ModFilterWidget::create(static_cast<MinecraftInstance&>(instance).getPackProfile()->getComponentVersion("net.minecraft"), page);
+        auto filter_widget = page->createFilterWidget();
         page->setFilterWidget(filter_widget);
         model->setFilter(page->getFilter());
 
@@ -41,8 +41,6 @@ class ModPage : public ResourcePage {
         return page;
     }
 
-    ~ModPage() override = default;
-
     //: The plural version of 'mod'
     [[nodiscard]] inline QString resourcesString() const override { return tr("mods"); }
     //: The singular version of 'mods'
@@ -50,19 +48,18 @@ class ModPage : public ResourcePage {
 
     [[nodiscard]] QMap<QString, QString> urlHandlers() const override;
 
-    void addResourceToDialog(ModPlatform::IndexedPack&, ModPlatform::IndexedVersion&) override;
+    void addResourceToPage(ModPlatform::IndexedPack::Ptr, ModPlatform::IndexedVersion&, std::shared_ptr<ResourceFolderModel>) override;
 
-    virtual auto validateVersion(ModPlatform::IndexedVersion& ver, QString mineVer, std::optional<ResourceAPI::ModLoaderTypes> loaders = {}) const -> bool = 0;
+    virtual unique_qobject_ptr<ModFilterWidget> createFilterWidget() = 0;
 
     [[nodiscard]] bool supportsFiltering() const override { return true; };
     auto getFilter() const -> const std::shared_ptr<ModFilterWidget::Filter> { return m_filter; }
     void setFilterWidget(unique_qobject_ptr<ModFilterWidget>&);
 
-   public slots:
-    void updateVersionList() override;
-
    protected:
     ModPage(ModDownloadDialog* dialog, BaseInstance& instance);
+
+    virtual void prepareProviderCategories() {};
 
    protected slots:
     virtual void filterMods();
